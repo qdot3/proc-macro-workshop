@@ -26,13 +26,16 @@ pub fn derive_builder(input: TokenStream) -> TokenStream {
     };
 
     let builder_definition = {
-        let builder_field = members
-            .iter()
-            .zip(types.iter())
-            .map(|(member, ty)| match member {
-                syn::Member::Named(ident) => quote! { #ident: std::option::Option<#ty> },
-                syn::Member::Unnamed(_) => quote! { std::option::Option<#ty> },
-            });
+        let builder_field = members.iter().zip(types.iter()).map(|(member, ty)| {
+            let field_ty = match extract_option(ty) {
+                Some(_) => quote! { #ty },
+                None => quote! { std::option::Option<#ty> },
+            };
+            match member {
+                syn::Member::Named(ident) => quote! { #ident: #field_ty },
+                syn::Member::Unnamed(_) => quote! { #field_ty },
+            }
+        });
         quote! {
             pub struct #builder_name #ty_generics #where_clause {
                 #( #builder_field, )*
@@ -41,10 +44,9 @@ pub fn derive_builder(input: TokenStream) -> TokenStream {
     };
 
     let builder_setter_impl = {
-        let setter = members
-            .iter()
-            .zip(types.iter())
-            .map(|(member, ty)| match member {
+        let setter = members.iter().zip(types.iter()).map(|(member, ty)| {
+            let ty = extract_option(ty).unwrap_or(ty.clone());
+            match member {
                 syn::Member::Named(ident) => quote! {
                     pub fn #ident(&mut self, #ident: #ty) -> &mut Self {
                         self.#ident = Some(#ident);
@@ -60,7 +62,8 @@ pub fn derive_builder(input: TokenStream) -> TokenStream {
                         }
                     }
                 }
-            });
+            }
+        });
         quote! {
             impl #impl_generics #builder_name #ty_generics #where_clause {
                 #( #setter )*
@@ -69,14 +72,19 @@ pub fn derive_builder(input: TokenStream) -> TokenStream {
     };
 
     let builder_build_impl = {
-        let try_set_field = members.iter().map(|member| match member {
-            syn::Member::Named(ident) => quote! {
-                #ident: self.#ident.clone().ok_or("")?
-            },
-            syn::Member::Unnamed(index) => quote! {
-                self.#index.clone().ok_or("")?
-            },
-        });
+        let try_set_field = members
+            .iter()
+            .zip(types.iter())
+            .map(|(member, ty)| match member {
+                syn::Member::Named(ident) => match extract_option(ty) {
+                    Some(_) => quote! { #ident: self.#ident.clone() },
+                    None => quote! { #ident: self.#ident.clone().ok_or("")? },
+                },
+                syn::Member::Unnamed(index) => match extract_option(ty) {
+                    Some(_) => quote! { self.#index.clone() },
+                    None => quote! { self.#index.clone().ok_or("")? },
+                },
+            });
 
         match struct_ty {
             StructType::Named | StructType::Union => quote! {
@@ -136,32 +144,54 @@ enum StructType {
     Union,
 }
 
-fn is_option_ty(ty: &syn::Type) -> bool {
-    let path_without_arg = if let syn::Type::Path(syn::TypePath { qself, path }) = ty {
+fn extract_option(ty: &syn::Type) -> Option<syn::Type> {
+    let path = if let syn::Type::Path(syn::TypePath { qself, path }) = ty {
         if qself.is_some() {
-            return false;
+            return None;
         }
-
-        let mut path = path.clone();
-        path.segments
-            .iter_mut()
-            .for_each(|path_segment| path_segment.arguments = syn::PathArguments::None);
-        path
+        path.clone()
     } else {
-        return false;
+        return None;
     };
 
     let candidates = Vec::from_iter(
         [
             "Option",
             "std::option::Option",
-            "::std::option::Option",
+            // "::std::option::Option",
             "core::option::Option",
-            "::core::option::Option",
+            // "::core::option::Option",
         ]
         .into_iter()
         .map(|s| syn::parse_str::<syn::TypePath>(s).unwrap().path),
     );
+    for candidate in candidates {
+        let len = candidate.segments.len();
+        if path.segments.len() == len
+            && (0..len - 1).all(|i| candidate.segments[i] == path.segments[i])
+            && candidate.segments[len - 1].ident == path.segments[len - 1].ident
+        {
+            match &path.segments[len - 1].arguments {
+                syn::PathArguments::AngleBracketed(angle_bracketed_generic_arguments) => {
+                    if let Some(syn::GenericArgument::Type(ty)) =
+                        angle_bracketed_generic_arguments.args.first()
+                    {
+                        return Some(ty.clone());
+                    }
+                }
+                _ => continue,
+            }
+        }
+    }
 
-    candidates.contains(&path_without_arg)
+    None
+}
+
+#[test]
+fn test_extract_option() {
+    let ty = syn::parse_str::<syn::Type>("std::option::Option<String>").unwrap();
+    assert_eq!(
+        extract_option(&ty).unwrap(),
+        syn::parse_str("String").unwrap()
+    )
 }
