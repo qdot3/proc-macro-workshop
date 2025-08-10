@@ -76,38 +76,38 @@ pub fn derive_builder(input: TokenStream) -> TokenStream {
 
     // #[builder(each = arg)] Vec<T> -> pub fn arg(&mut self, arg: T) -> &mut Self;
     let builder_each_setter_impl = {
-        let each_setter = izip!(&members, &types, &attrs).filter_map(|(member, ty, attrs)| {
-            let mut each_setter = None;
+        let each_setter = izip!(&members, &types, &attrs).flat_map(|(member, ty, attrs)| {
+            let mut each_setter = std::vec::Vec::new();
             if let Some(ty) = extract_vec_ty(ty) {
                 for attr in attrs {
                     if attr.path().is_ident("builder") {
-                        attr.parse_nested_meta(|meta| {
+                        if let Err(e) = attr.parse_nested_meta(|meta| {
                             if meta.path.is_ident("each") {
                                 let arg: syn::LitStr = meta.value()?.parse()?;
                                 let arg = syn::Ident::new(&arg.value(), Span::call_site());
-                                each_setter = match member {
-                                    syn::Member::Named(ident) => if &arg != ident {
-                                        Some(quote! {
+                                match member {
+                                    syn::Member::Named(ident) if ident != &arg => {
+                                        each_setter.push(quote! {
                                             pub fn #arg(&mut self, #arg: #ty) -> &mut Self {
                                                 self.#ident.get_or_insert(std::vec::Vec::new()).push(#arg);
                                                 self
                                             }
-                                        })
-                                    } else {
-                                        None
-                                    },
-                                    syn::Member::Unnamed(index) => Some(quote! {
+                                        })} ,
+                                    syn::Member::Unnamed(index) => each_setter.push(quote! {
                                         pub fn #arg(&mut self, #arg: #ty) -> &mut Self {
                                             self.#index.get_or_insert_default().push(#arg);
                                             self
                                         }
                                     }),
+                                    _ => (),
                                 };
                                 Ok(())
                             } else {
                                 Err(meta.error("expected #[builder(each = ...)]"))
                             }
-                        }).unwrap();
+                        }) {
+                            each_setter.push(e.to_compile_error());
+                        }
                     }
                 }
             }
