@@ -137,17 +137,31 @@ enum StructType {
 }
 
 fn is_option_ty(ty: &syn::Type) -> bool {
-    let candidates: [syn::TypePath; 5] = [
-        syn::parse_str("Option").unwrap(),
-        syn::parse_str("std::option::Option").unwrap(),
-        syn::parse_str("::std::option::Option").unwrap(),
-        syn::parse_str("core::option::Option").unwrap(),
-        syn::parse_str("::core::option::Option").unwrap(),
-    ];
+    let path_without_arg = if let syn::Type::Path(syn::TypePath { qself, path }) = ty {
+        if qself.is_some() {
+            return false;
+        }
 
-    if let syn::Type::Path(type_path) = ty {
-        candidates.contains(type_path)
+        let mut path = path.clone();
+        path.segments
+            .iter_mut()
+            .for_each(|path_segment| path_segment.arguments = syn::PathArguments::None);
+        path
     } else {
-        false
-    }
+        return false;
+    };
+
+    let candidates = Vec::from_iter(
+        [
+            "Option",
+            "std::option::Option",
+            "::std::option::Option",
+            "core::option::Option",
+            "::core::option::Option",
+        ]
+        .into_iter()
+        .map(|s| syn::parse_str::<syn::TypePath>(s).unwrap().path),
+    );
+
+    candidates.contains(&path_without_arg)
 }
