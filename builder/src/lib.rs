@@ -8,8 +8,8 @@ use syn::{parse_macro_input, DeriveInput};
 pub fn derive_builder(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    let name = input.ident;
-    let builder_name = format_ident!("{}Builder", name, span = Span::call_site());
+    let name = input.ident.clone();
+    let builder_name = format_ident!("{}Builder", name);
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     let (struct_ty, members, types, attrs) = match &input.data {
@@ -23,8 +23,16 @@ pub fn derive_builder(input: TokenStream) -> TokenStream {
             Vec::from_iter(data_struct.fields.iter().map(|f| f.ty.clone())),
             Vec::from_iter(data_struct.fields.iter().map(|f| f.attrs.clone())),
         ),
-        syn::Data::Enum(_) => std::panic!("expected struct, but found enum"),
-        syn::Data::Union(_) => std::panic!("expected struct, but found union"),
+        syn::Data::Enum(_) => {
+            return syn::Error::new(input.ident.span(), "expected struct, but found enum")
+                .to_compile_error()
+                .into()
+        }
+        syn::Data::Union(_) => {
+            return syn::Error::new(input.ident.span(), "expected struct, but found union")
+                .to_compile_error()
+                .into()
+        }
     };
 
     let builder_definition = {
